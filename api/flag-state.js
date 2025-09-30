@@ -129,60 +129,54 @@ async function handler(req, res) {
       // Get current flag content for verification
       const flagList = currentState.flagList || DEFAULT_STATE.flagList;
       const currentFlagContent = Buffer.from(flagList[currentState.Q] || '', 'base64').toString();
-      
+    
       console.log(`📊 GET Request - Q=${currentState.Q}, Flag="${currentFlagContent}", Mode=submission-based`);
-      
+    
+      // Sanitize the response to hide sensitive data
       res.status(200).json({
         Q: currentState.Q,
-        currentFlag: currentState.Q, // Current flag index is Q
         attempts: currentState.totalAttempts,
         lastUpdated: currentState.lastUpdated,
         lastRotation: currentState.lastRotation,
         rotationMode: 'submission-based',
         serverTime: Date.now(),
         usedFlagsCount: Object.keys(currentState.usedFlags || {}).length,
-        currentFlagContent: currentFlagContent, // For debugging
-        currentFlagEncrypted: flagList[currentState.Q] || '' // Provide current encrypted flag for dataencrypted
+        // Remove sensitive fields like currentFlagContent and currentFlagEncrypted
       });
     } else if (req.method === 'POST') {
       const { action, flagIndex, submittedFlag } = req.body;
       const newState = { ...currentState };
-
+    
       switch (action) {
         case 'increment_attempts':
           newState.totalAttempts++;
           newState.lastUpdated = Date.now();
           break;
-
+    
         case 'validate_and_submit_flag':
           // Check if the submitted flag matches the current active flag
           if (typeof submittedFlag === 'string') {
-            // Get current flag (decode from base64) - current flag is at index Q
             const flagList = currentState.flagList || DEFAULT_STATE.flagList;
             const currentActiveFlag = Buffer.from(flagList[currentState.Q] || '', 'base64').toString();
             const normalizedSubmitted = submittedFlag.replace(/^flag\{|\}$/g, '');
             const normalizedCurrent = currentActiveFlag;
-
+    
             console.log(`🔍 Validating flag: "${normalizedSubmitted}" against current: "${normalizedCurrent}" (Q=${currentState.Q})`);
-
-            // Initialize usedFlags if it doesn't exist
+    
             if (!newState.usedFlags) {
               newState.usedFlags = {};
             }
-
-            // Check if this specific flag has already been used and blocked
+    
             const flagKey = normalizedCurrent;
             if (newState.usedFlags[flagKey]) {
-              // This flag has already been submitted and is blocked
               newState.totalAttempts++;
               newState.lastUpdated = Date.now();
               console.log(`❌ FLAG BLOCKED: "${normalizedSubmitted}" was already submitted and is now invalid`);
-              
+    
               const saved = await writeStateToStorage(newState);
               return res.status(200).json({
                 success: false,
                 Q: newState.Q,
-                currentFlag: newState.Q,
                 attempts: newState.totalAttempts,
                 lastUpdated: newState.lastUpdated,
                 serverTime: Date.now(),
@@ -192,23 +186,20 @@ async function handler(req, res) {
                 saved: saved
               });
             }
-
+    
             if (normalizedSubmitted === normalizedCurrent || submittedFlag === `flag{${normalizedCurrent}}`) {
-              // Flag is correct and hasn't been used yet - ROTATE TO NEXT FLAG
-              newState.usedFlags[flagKey] = true; // Block this flag permanently
-              newState.Q = (currentState.Q + 1) % 72; // Rotate to next flag
-              newState.lastRotation = Date.now(); // Update rotation timestamp
+              newState.usedFlags[flagKey] = true;
+              newState.Q = (currentState.Q + 1) % 72;
+              newState.lastRotation = Date.now();
               newState.totalAttempts++;
               newState.lastUpdated = Date.now();
-              
+    
               console.log(`🎯 FLAG ACCEPTED & ROTATED! "${normalizedCurrent}" blocked. Q incremented from ${currentState.Q} to ${newState.Q}.`);
-              
-              // Return success with rotation info
+    
               const saved = await writeStateToStorage(newState);
               return res.status(200).json({
                 success: true,
                 Q: newState.Q,
-                currentFlag: newState.Q,
                 attempts: newState.totalAttempts,
                 lastUpdated: newState.lastUpdated,
                 serverTime: Date.now(),
@@ -216,21 +207,18 @@ async function handler(req, res) {
                 rotationTriggered: true,
                 previousQ: currentState.Q,
                 newQ: newState.Q,
-                globalRefresh: true, // Signal to refresh all clients
-                currentFlagEncrypted: flagList[newState.Q] || '', // Provide new encrypted flag for dataencrypted
+                globalRefresh: true,
                 saved: saved
               });
             } else {
-              // Flag is incorrect
               newState.totalAttempts++;
               newState.lastUpdated = Date.now();
               console.log(`❌ FLAG REJECTED: "${normalizedSubmitted}" is not the current flag (Q=${currentState.Q})`);
-              
+    
               const saved = await writeStateToStorage(newState);
               return res.status(200).json({
                 success: false,
                 Q: newState.Q,
-                currentFlag: newState.Q,
                 attempts: newState.totalAttempts,
                 lastUpdated: newState.lastUpdated,
                 serverTime: Date.now(),
@@ -240,27 +228,25 @@ async function handler(req, res) {
             }
           }
           break;
-          
+    
         case 'reset':
           Object.assign(newState, DEFAULT_STATE);
           newState.lastUpdated = Date.now();
           console.log('🔄 State reset to defaults - Q=0');
           break;
-          
+    
         default:
           return res.status(400).json({ error: 'Invalid action' });
       }
-
-      // Save the updated state to memory
+    
       const saved = await writeStateToStorage(newState);
-      
+    
       if (!saved) {
         console.error('⚠️ Failed to save to memory, this should not happen');
       }
-
+    
       res.status(200).json({
         Q: newState.Q,
-        currentFlag: newState.Q,
         attempts: newState.totalAttempts,
         lastUpdated: newState.lastUpdated,
         serverTime: Date.now(),
